@@ -25,13 +25,14 @@ user_exists() {
 create_user() {
     local username="$1"
     local password="$2"
+    local uid="$3"
 
     if [ "$(user_exists "${username}")" -eq 1 ];
     then
         log "GENERAL" "User ${username} already exists, skip creation"
     else
       log "GENERAL" "Creating user ${username}"
-      adduser -S -h "${DATA_FOLDER}/$username" -g "$username" -s /bin/false -D "$username"
+      adduser -S -u ${uid} -h "${DATA_FOLDER}/$username" -g "$username" -s /bin/false -D "$username"
       echo -e "${password}\n${password}" | passwd "$username" &> /dev/null
 
       log "SFTP" "Prepare file structure for ${username}"
@@ -46,6 +47,7 @@ create_user() {
 create_users_from_config() {
   local username
   local password
+  local uid
 
   while IFS= read -r line
   do
@@ -56,7 +58,8 @@ create_users_from_config() {
 
     username="$(echo "$line" | cut -d ':' -f1)"
     password="$(echo "$line" | cut -d ':' -f2)"
-    create_user "${username}" "${password}"
+    uid="$(echo "$line" | cut -d ':' -f3)"
+    create_user "${username}" "${password}" "${uid}"
   done < "$ROOT_FOLDER/users"
 }
 
@@ -65,13 +68,15 @@ create_users_from_env() {
   local users
   local username
   local password
+  local uid
 
   users="$(env | grep ACCOUNT_)"
   for user_spec in $users; do
     username="$(echo "$user_spec" | cut -d '=' -f1 | cut -d '_' -f2)"
-    password="$(echo "$user_spec" | cut -d '=' -f2)"
+    password="$(echo "$user_spec" | cut -d '=' -f2 | cut -d ':' -f1)"
+    uid="$(echo "$user_spec" | cut -d '=' -f2 | cut -d ':' -f2)"
     
-    create_user "${username}" "${password}"
+    create_user "${username}" "${password}" "${uid}"
   done
 }
 
@@ -123,64 +128,12 @@ EOF
     sed -i 's,\r,,;s, *$,,' "$VSFTPD_CONFIG_FILE"
 }
 
-# Configure sshd for sftp
-configure_sftp() {
-    log "SFTP" "Check for existing host keys or create a new pair"
-    if [ ! -d "${ROOT_FOLDER}/ssh_hostkeys" ]
-    then
-        mkdir -p "${ROOT_FOLDER}/ssh_hostkeys"
-        log "SFTP" "Create host keys"
-        ssh-keygen -A >/dev/null
-        mv /etc/ssh/ssh_host_* "${ROOT_FOLDER}/ssh_hostkeys/"
-    fi
-
-    log "SFTP" "Create banner file"
-    echo "${BANNER}" > /etc/ssh/banner
-
-    log "SFTP" "Configure OpenSSH-Server"
-    cat << EOF > /etc/ssh/sshd_config
-# base
-LogLevel                INFO
-UseDNS                  no
-Banner                  /etc/ssh/banner
-
-# host key
-HostKey                 /opt/chrooted-ftp/ssh_hostkeys/ssh_host_dsa_key
-HostKey                 /opt/chrooted-ftp/ssh_hostkeys/ssh_host_ecdsa_key
-HostKey                 /opt/chrooted-ftp/ssh_hostkeys/ssh_host_ed25519_key
-HostKey                 /opt/chrooted-ftp/ssh_hostkeys/ssh_host_rsa_key
-
-# force sftp only
-ForceCommand            internal-sftp
-Subsystem               sftp    /usr/lib/ssh/internal-sftp r -d /data
-Port                    2022
-
-# set up password auth and chroot
-ChrootDirectory         ${DATA_FOLDER}/%u
-PermitEmptyPasswords    no
-PasswordAuthentication  yes
-HostbasedAuthentication no
-PubkeyAuthentication    no
-IgnoreUserKnownHosts    yes
-
-# disable features that are not required
-X11Forwarding           no
-AllowTcpForwarding      no
-PermitTunnel            no
-PermitTTY               no
-GatewayPorts            no
-EOF
-
-}
-
 create_data_folder
 create_users_from_config
 create_users_from_env
 configure_vsftpd
-configure_sftp
 
 log "GENERAL" "Setup completed."
 log "VSFTPD" "Starting"
-log "SFTP" "Starting"
 
-exec multirun -v "/usr/sbin/vsftpd /etc/vsftpd/vsftpd.conf" "/usr/sbin/sshd -D -e"
+exec multirun -v "/usr/sbin/vsftpd /etc/vsftpd/vsftpd.conf"
