@@ -26,20 +26,22 @@ create_user() {
     local username="$1"
     local password="$2"
     local uid="$3"
+    local group_name="ftpusers"
 
     if [ "$(user_exists "${username}")" -eq 1 ];
     then
         log "GENERAL" "User ${username} already exists, skip creation"
     else
       log "GENERAL" "Creating user ${username}"
-      adduser -S -u ${uid} -h "${DATA_FOLDER}/$username" -g "$username" -s /bin/false -D "$username"
+      addgroup -g ${USER_GID} ${group_name} 2>/dev/null || true
+      adduser -S -u ${uid} -G ${group_name} -h "${DATA_FOLDER}/$username" -g "$username" -s /bin/false -D "$username"
       echo -e "${password}\n${password}" | passwd "$username" &> /dev/null
 
       log "SFTP" "Prepare file structure for ${username}"
       local data_path="${DATA_FOLDER}/$username"
       chown root:root "${data_path}"
       mkdir -p "${data_path}${USER_FTP_POSTFIX}"
-      chown "${username}" "${data_path}${USER_FTP_POSTFIX}"
+      chown -R "${username}:${group_name}" "${data_path}${USER_FTP_POSTFIX}"
     fi
 }
 
